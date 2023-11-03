@@ -1,0 +1,84 @@
+trigger:
+  - main
+
+name: Deploy Azure integration platform
+
+variables:
+  vmImageName: 'ubuntu-latest'
+  azureServiceConnection: 'Azure Sandbox'
+  aseResourceGroupName: 'ase-rg'
+  location: 'norwayeast'
+
+stages:
+  - stage: build
+    displayName: Build Artifact
+    jobs:
+      - job: "build"
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: CopyFiles@2
+            displayName: "Copy Files"
+            inputs:
+              sourceFolder: $(Build.SourcesDirectory)
+              targetFolder: $(Build.ArtifactStagingDirectory)
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Artifact: bicep templates"
+            inputs:
+              pathtoPublish: $(Build.ArtifactStagingDirectory)
+              artifactName: sources
+              publishLocation: Container
+
+  - stage: sandbox_preview
+    displayName: Preview Bicep Sandbox deployment
+    jobs:
+      - deployment: sandbox_preview
+        pool:
+          vmImage: $(vmImageName)
+        environment: Bicep-infra-preview
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@2
+                  displayName: Downloading pipeline artifact
+                  inputs:
+                    artifact: sources
+                    path: $(Build.ArtifactStagingDirectory)
+                - task: AzureCLI@2
+                  displayName: Preview Bicep deployment
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az --version
+                      az group create --name $(aseResourceGroupName) --location $(location)
+                      az deployment group what-if --resource-group $(aseResourceGroupName) --template-file '$(Build.ArtifactStagingDirectory)/main.bicep' --parameters '$(Build.ArtifactStagingDirectory)/parameters/sb.parameters.json'
+
+  - stage: sandbox_deploy
+    displayName: Bicep Sandbox deployment
+    jobs:
+      - deployment: sandbox_deploy
+        pool:
+          vmImage: $(vmImageName)
+        environment: Bicep-crm-infra-deploy-sandbox
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@2
+                  displayName: Downloading pipeline artifact
+                  inputs:
+                    artifact: sources
+                    path: $(Build.ArtifactStagingDirectory)
+                - task: AzureCLI@2
+                  displayName: Run Bicep deployment
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az --version
+                      az group create --name $(aseResourceGroupName) --location $(location)
+                      az deployment group create --resource-group $(aseResourceGroupName) --template-file '$(Build.ArtifactStagingDirectory)/main.bicep' --parameters '$(Build.ArtifactStagingDirectory)/parameters/sb.parameters.json'
